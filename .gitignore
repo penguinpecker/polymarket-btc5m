@@ -1,0 +1,21 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# runtime state — don't version
+paper/state.json
+paper/trades.csv
+paper/tick.log
+paper/bot.out
+paper/bot.err
+
+# large data files
+btcusdt_5m.csv
+equity_curve.csv
+equity_curve_v2.csv
+equity_curve_polymarket.csv
+
+# collected Polymarket data (potentially huge)
+pm_data/
+pm_live/
