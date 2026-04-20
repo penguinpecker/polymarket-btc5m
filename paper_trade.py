@@ -85,7 +85,7 @@ MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c
 GAS_COST_USD        = 0.01      # Polygon USDC tx cost (symbolic)
 LOW_LIQ_HOURS       = {3, 4, 5}
 T_ENTRY_OFFSET_S    = 30        # observe book this many sec into window
-RESOLUTION_TIMEOUT  = 120       # seconds to wait for Polymarket resolution
+RESOLUTION_TIMEOUT  = 300       # seconds to wait for Polymarket resolution
 
 # will be set at boot
 LATENCY_MS = 250                # round-trip to Polymarket (India baseline)
