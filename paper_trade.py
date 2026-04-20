@@ -126,12 +126,21 @@ if not TRADES.exists():
         ])
 
 # ---------- market data helpers ----------
-def fetch_recent_klines(n=60):
+def fetch_recent_klines(n=60, cutoff_ms=None):
+    """Return the last n fully-closed 5m bars.
+    cutoff_ms: only keep bars with open_time < cutoff_ms. Defaults to
+    (now_utc - 5min) so that the currently-forming bar is excluded even if
+    Binance hasn't yet emitted it in the klines response (race we hit at
+    boundary crossings)."""
     r = requests.get(BINANCE, params={
-        "symbol":"BTCUSDT","interval":"5m","limit": n+1
+        "symbol":"BTCUSDT","interval":"5m","limit": n+2
     }, timeout=10)
     r.raise_for_status()
-    rows = r.json()[:-1]
+    rows = r.json()
+    if cutoff_ms is None:
+        cutoff_ms = int(time.time() * 1000) - 5*60*1000 + 1
+    rows = [k for k in rows if k[0] < cutoff_ms]
+    rows = rows[-n:]
     return [{"open_time": k[0], "open": float(k[1]), "high": float(k[2]),
              "low": float(k[3]), "close": float(k[4]), "volume": float(k[5]),
              "taker_buy_base": float(k[9])} for k in rows]
@@ -300,7 +309,8 @@ def try_enter_at_next_boundary(s):
 
     window_start = int(next_bar.timestamp())
     try:
-        bars = fetch_recent_klines(60)
+        # cutoff = start of current window; keep only strictly-earlier bars
+        bars = fetch_recent_klines(60, cutoff_ms=window_start * 1000)
     except Exception as e:
         log(f"ERR fetch_klines: {e}"); time.sleep(10); return
 
