@@ -158,11 +158,22 @@ def measure_latency(n=5):
     samples.sort()
     return samples[len(samples)//2]
 
-def get_market_by_slug(slug):
+def get_market_by_slug(slug, include_closed=False):
+    """Gamma /markets defaults to active-only; pass include_closed to reach
+    resolved markets (required for reading outcomePrices post-settlement)."""
     try:
-        r = requests.get(f"{GAMMA}/markets", params={"slug": slug}, timeout=5)
-        if r.status_code != 200 or not r.json(): return None
-        m = r.json()[0]
+        params = {"slug": slug}
+        if include_closed: params["closed"] = "true"
+        r = requests.get(f"{GAMMA}/markets", params=params, timeout=5)
+        if r.status_code != 200: return None
+        js = r.json()
+        if not js and not include_closed:
+            # retry including closed — market may have just resolved
+            params["closed"] = "true"
+            r = requests.get(f"{GAMMA}/markets", params=params, timeout=5)
+            js = r.json() if r.status_code == 200 else []
+        if not js: return None
+        m = js[0]
         tokens = m.get("clobTokenIds")
         if isinstance(tokens, str): tokens = json.loads(tokens)
         return {
@@ -236,7 +247,7 @@ def get_polymarket_resolution(slug, timeout_s=RESOLUTION_TIMEOUT):
     """Poll Gamma until market closed; return (outcome ±1, polled_seconds) or (None, None)."""
     t0 = time.time()
     while time.time() - t0 < timeout_s:
-        m = get_market_by_slug(slug)
+        m = get_market_by_slug(slug, include_closed=True)
         if m and m["closed"]:
             op = m["outcome_prices"]
             if isinstance(op, str): op = json.loads(op)
