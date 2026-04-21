@@ -83,7 +83,8 @@ FIXED_STAKE         = 20.00     # flat stake per trade (overrides tier size_frac
 SAFETY_FRAC         = 0.50      # never stake more than this fraction of bankroll
 DEPTH_CAP_FRACTION  = 0.10      # max 10% of same-side book depth
 MIN_DEPTH_USD       = 300.00    # skip if thinner than this
-MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c
+MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c (Tier C)
+MAX_SPREAD_A        = 0.06      # Tier A has stronger signal — allow 6c
 GAS_COST_USD        = 0.01      # Polygon USDC tx cost (symbolic)
 LOW_LIQ_HOURS       = {3, 4, 5}
 T_ENTRY_OFFSET_S    = 30        # observe book this many sec into window
@@ -390,9 +391,10 @@ def try_enter_at_next_boundary(s):
     depth    = sum(p*sz for p,sz in book["asks"] if 0.01 < p < 0.99)
 
     # filters
-    if spread > MAX_SPREAD:
+    spread_limit = MAX_SPREAD_A if tier.startswith("A") else MAX_SPREAD
+    if spread > spread_limit:
         s["skipped_spread"] += 1
-        log(f"SKIP  ws={window_start}  {tier}  spread_too_wide bid={best_bid:.3f} ask={best_ask:.3f}")
+        log(f"SKIP  ws={window_start}  {tier}  spread_too_wide bid={best_bid:.3f} ask={best_ask:.3f} (limit={spread_limit})")
         save_state(s); return
     if depth < MIN_DEPTH_USD:
         s["skipped_thin"] += 1
