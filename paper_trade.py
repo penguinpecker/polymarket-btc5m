@@ -116,14 +116,16 @@ def load_state():
 
 def save_state(s): STATE.write_text(json.dumps(s, indent=2))
 
+TRADES_HEADER = [
+    "open_time_utc","close_time_utc","direction","tier","stake_intended",
+    "stake_filled","vwap","best_ask","best_bid","spread","book_depth_usd",
+    "levels_walked","filled_ratio","binance_outcome","chainlink_outcome",
+    "basis_flip","pnl","bankroll_after","latency_ms","fill_source",
+    "resolve_source",
+]
 if not TRADES.exists():
     with open(TRADES, "w", newline="") as f:
-        csv.writer(f).writerow([
-            "open_time_utc","close_time_utc","direction","tier","stake_intended",
-            "stake_filled","vwap","best_ask","best_bid","spread","book_depth_usd",
-            "levels_walked","filled_ratio","binance_outcome","chainlink_outcome",
-            "basis_flip","pnl","bankroll_after","latency_ms","fill_source",
-        ])
+        csv.writer(f).writerow(TRADES_HEADER)
 
 # ---------- market data helpers ----------
 def fetch_recent_klines(n=60, cutoff_ms=None):
@@ -485,7 +487,7 @@ def resolve_open_trade(s):
             t["levels_walked"], f"{t['filled_ratio']:.4f}",
             binance_outcome, chain_outcome,
             int(basis_flip), f"{pnl:+.4f}", f"{s['bankroll']:.4f}",
-            f"{t['latency_ms']}", t["fill_source"],
+            f"{t['latency_ms']}", t["fill_source"], resolve_source,
         ])
     log(f"RESOLVE  {t['tier']}  pred={t['direction']:+}  "
         f"bin={binance_outcome:+} chain={chain_outcome:+}{'(FLIP!)' if basis_flip else ''}  "

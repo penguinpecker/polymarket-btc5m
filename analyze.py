@@ -108,10 +108,17 @@ for lo, hi in buckets:
 print("\n" + "=" * 78)
 print(f"{'RESOLUTION SOURCE':<78}")
 print("=" * 78)
-src_count = defaultdict(int)
-for r in rows: src_count[r["fill_source"]] += 1
-for src, c in sorted(src_count.items(), key=lambda x: -x[1]):
-    print(f"  {src:<30} {c}")
+fill_src = defaultdict(int)
+res_src  = defaultdict(int)
+for r in rows:
+    fill_src[r.get("fill_source","?")] += 1
+    res_src[r.get("resolve_source","?")] += 1
+print("  entry fill source:")
+for k, c in sorted(fill_src.items(), key=lambda x: -x[1]):
+    print(f"    {k:<30} {c}")
+print("  resolution source:")
+for k, c in sorted(res_src.items(), key=lambda x: -x[1]):
+    print(f"    {k:<30} {c}")
 
 print("\n" + "=" * 78)
 print(f"{'EQUITY / DRAWDOWN':<78}")
