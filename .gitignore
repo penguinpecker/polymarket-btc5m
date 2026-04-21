@@ -19,3 +19,4 @@ equity_curve_polymarket.csv
 # collected Polymarket data (potentially huge)
 pm_data/
 pm_live/
+paper/trades.csv.bak
