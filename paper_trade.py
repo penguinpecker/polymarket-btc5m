@@ -313,8 +313,10 @@ def compute_signal(bars):
     if abs(vol_z) > 4:          return None, 0, "skip_volext", diag
     if z_prev >  3.0: return -1, 0.020, "A-z>3-DOWN",  diag
     if z_prev < -3.0: return +1, 0.020, "A-z<-3-UP",   diag
-    if z_prev >  2.0: return -1, 0.015, "B-z>2-DOWN",  diag
-    if z_prev < -2.0: return +1, 0.015, "B-z<-2-UP",   diag
+    # Tier B DISABLED after 0/5 live (p=2% at historical 54%) — refusing to trade on that.
+    # Re-enable by un-commenting once data shows recovery in historical scan.
+    # if z_prev >  2.0: return -1, 0.015, "B-z>2-DOWN",  diag
+    # if z_prev < -2.0: return +1, 0.015, "B-z<-2-UP",   diag
     if ret_12 >  0.005 and br_1 > 0.55: return -1, 0.010, "C-trend+tbd-DOWN", diag
     if ret_12 < -0.005 and br_1 < 0.45: return +1, 0.010, "C-trend+tbd-UP",   diag
     return None, 0, "no_signal", diag
