@@ -85,6 +85,8 @@ DEPTH_CAP_FRACTION  = 0.10      # max 10% of same-side book depth
 MIN_DEPTH_USD       = 300.00    # skip if thinner than this
 MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c (Tier C)
 MAX_SPREAD_A        = 0.06      # Tier A has stronger signal — allow 6c
+MAX_ENTRY_C         = 0.55      # Tier C: skip if entry > 0.55 (EV < 0 at 56% WR)
+MAX_ENTRY_A         = 0.70      # Tier A: skip if entry > 0.70 (EV marginal at 59% WR)
 GAS_COST_USD        = 0.01      # Polygon USDC tx cost (symbolic)
 LOW_LIQ_HOURS       = {3, 4, 5}
 T_ENTRY_OFFSET_S    = 30        # observe book this many sec into window
@@ -405,6 +407,12 @@ def try_enter_at_next_boundary(s):
     fill = walk_ask_book(book, intended)
     if not fill or fill["cost_usd"] < 0.10:
         log(f"SKIP  ws={window_start}  {tier}  no_fill")
+        save_state(s); return
+
+    # Entry-price EV filter: skip if fill price implies negative EV at historical WR
+    max_entry = MAX_ENTRY_A if tier.startswith("A") else MAX_ENTRY_C
+    if fill["vwap"] > max_entry:
+        log(f"SKIP  ws={window_start}  {tier}  entry_too_high vwap={fill['vwap']:.3f} (limit={max_entry})")
         save_state(s); return
 
     if fill["filled_ratio"] < 0.5:
