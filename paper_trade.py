@@ -244,19 +244,30 @@ def walk_ask_book(book, stake_usd, depth_cap_fraction=DEPTH_CAP_FRACTION):
     }
 
 def get_polymarket_resolution(slug, timeout_s=RESOLUTION_TIMEOUT):
-    """Poll Gamma until market closed; return (outcome ±1, polled_seconds) or (None, None)."""
+    """Poll Gamma for resolution. Two signals, checked in order:
+      1. `closed: True`  → formal resolution (Gamma lags real resolution by hours)
+      2. `outcomePrices` pinned at extreme (|up - 0.5| > 0.48)  → market price
+         has snapped to the Chainlink-decided outcome. This is the fast path.
+    Returns (outcome ±1 or 0 for tie, polled_seconds) or (None, None) on timeout.
+    Called only after window end, so outcomePrices extremes are always
+    interpretable as resolution (can't be mid-trade directional spikes)."""
     t0 = time.time()
     while time.time() - t0 < timeout_s:
         m = get_market_by_slug(slug, include_closed=True)
-        if m and m["closed"]:
+        if m:
             op = m["outcome_prices"]
             if isinstance(op, str): op = json.loads(op)
             if op:
                 up = float(op[0])
-                if up > 0.5:  return +1, int(time.time() - t0)
-                if up < 0.5:  return -1, int(time.time() - t0)
-                return 0, int(time.time() - t0)
-        time.sleep(5)
+                # Fast path: price already at resolution extreme
+                if abs(up - 0.5) >= 0.48:
+                    return (+1 if up > 0.5 else -1), int(time.time() - t0)
+                # Slow path: formal `closed` flip
+                if m["closed"]:
+                    if up > 0.5:  return +1, int(time.time() - t0)
+                    if up < 0.5:  return -1, int(time.time() - t0)
+                    return 0, int(time.time() - t0)
+        time.sleep(3)
     return None, None
 
 def get_binance_outcome(start_ts_sec):
