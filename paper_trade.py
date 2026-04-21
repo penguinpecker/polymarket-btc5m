@@ -79,6 +79,8 @@ CLOB    = "https://clob.polymarket.com"
 
 BASE_PRICE_FALLBACK = 0.505     # only used if book fetch fails entirely
 MAX_STAKE           = 2000.00
+FIXED_STAKE         = 20.00     # flat stake per trade (overrides tier size_frac)
+SAFETY_FRAC         = 0.50      # never stake more than this fraction of bankroll
 DEPTH_CAP_FRACTION  = 0.10      # max 10% of same-side book depth
 MIN_DEPTH_USD       = 300.00    # skip if thinner than this
 MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c
@@ -367,7 +369,7 @@ def try_enter_at_next_boundary(s):
         if s["polymarket_reachable"] is not False:
             log(f"NOTICE  book fetch failed; using fallback price {BASE_PRICE_FALLBACK}")
         s["polymarket_reachable"] = False
-        stake = min(s["bankroll"] * size_frac, MAX_STAKE)
+        stake = min(FIXED_STAKE, s["bankroll"] * SAFETY_FRAC, MAX_STAKE)
         s["open_trade"] = {
             "window_start_ts": window_start, "direction": direction, "tier": tier,
             "stake_intended": round(stake,4), "stake_filled": round(stake,4),
@@ -395,7 +397,7 @@ def try_enter_at_next_boundary(s):
         log(f"SKIP  ws={window_start}  {tier}  thin_book depth=${depth:.0f}")
         save_state(s); return
 
-    intended = min(s["bankroll"] * size_frac, MAX_STAKE)
+    intended = min(FIXED_STAKE, s["bankroll"] * SAFETY_FRAC, MAX_STAKE)
     fill = walk_ask_book(book, intended)
     if not fill or fill["cost_usd"] < 0.10:
         log(f"SKIP  ws={window_start}  {tier}  no_fill")
