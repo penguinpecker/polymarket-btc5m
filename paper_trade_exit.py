@@ -67,7 +67,7 @@ def _patched_getaddrinfo(host, *a, **kw):
 socket.getaddrinfo = _patched_getaddrinfo
 
 # ---------- paths & constants ----------
-ROOT   = pathlib.Path(__file__).parent / "paper"
+ROOT   = pathlib.Path(__file__).parent / "paper_exit"
 ROOT.mkdir(exist_ok=True)
 STATE  = ROOT / "state.json"
 TRADES = ROOT / "trades.csv"
@@ -87,6 +87,12 @@ MAX_SPREAD          = 0.04      # skip if best_ask - best_bid > 4c (Tier C)
 MAX_SPREAD_A        = 0.06      # Tier A has stronger signal — allow 6c
 MAX_ENTRY_C         = 0.55      # Tier C: skip if entry > 0.55 (EV < 0 at 56% WR)
 MAX_ENTRY_A         = 0.70      # Tier A: skip if entry > 0.70 (EV marginal at 59% WR)
+
+# --- EXIT LOGIC (this variant only) ---
+SL_MID_THRESHOLD    = 0.15      # stop-loss: exit if our-side mid drops to this
+TP_MID_THRESHOLD    = 0.85      # take-profit: exit if our-side mid rises to this
+EXIT_POLL_INTERVAL  = 30        # seconds between book polls while trade open
+EXIT_MIN_AGE        = 60        # don't evaluate exits until trade is this old
 GAS_COST_USD        = 0.01      # Polygon USDC tx cost (symbolic)
 LOW_LIQ_HOURS       = {3, 4, 5}
 T_ENTRY_OFFSET_S    = 30        # observe book this many sec into window
@@ -126,7 +132,7 @@ TRADES_HEADER = [
     "stake_filled","vwap","best_ask","best_bid","spread","book_depth_usd",
     "levels_walked","filled_ratio","binance_outcome","chainlink_outcome",
     "basis_flip","pnl","bankroll_after","latency_ms","fill_source",
-    "resolve_source",
+    "resolve_source","exit_type","exit_price","exit_age_s",
 ]
 if not TRADES.exists():
     with open(TRADES, "w", newline="") as f:
@@ -443,9 +449,77 @@ def try_enter_at_next_boundary(s):
         f"lat={call_ms:.0f}ms  {diag}")
     save_state(s)
 
+def poll_for_exit(t):
+    """Poll our-side orderbook every EXIT_POLL_INTERVAL sec during the open
+    window. Return (exit_type, exit_price, exit_age) if SL/TP triggered,
+    else None (no early exit)."""
+    window_start = t["window_start_ts"]
+    window_close = window_start + 300
+    slug = t.get("slug", f"btc-updown-5m-{window_start}")
+    m = get_market_by_slug(slug)
+    if not m: return None
+    token = m["token_up"] if t["direction"] == +1 else m["token_down"]
+    while time.time() < window_close - 5:
+        age = time.time() - window_start
+        if age < EXIT_MIN_AGE:
+            time.sleep(EXIT_POLL_INTERVAL); continue
+        book = fetch_book(token)
+        if not book or not book["bids"] or not book["asks"]:
+            time.sleep(EXIT_POLL_INTERVAL); continue
+        best_bid = book["bids"][0][0]
+        best_ask = book["asks"][0][0]
+        mid = (best_bid + best_ask) / 2
+        if mid <= SL_MID_THRESHOLD:
+            return ("SL", best_bid, int(age))
+        if mid >= TP_MID_THRESHOLD:
+            return ("TP", best_bid, int(age))
+        time.sleep(EXIT_POLL_INTERVAL)
+    return None
+
 def resolve_open_trade(s):
     t = s["open_trade"]
     close_ts = t["window_start_ts"] + 300
+
+    # Try early exit
+    exit_info = poll_for_exit(t)
+    if exit_info:
+        exit_type, exit_price, exit_age = exit_info
+        stake = t["stake_filled"]; ep = t["vwap"]
+        cash_from_sale = (stake / ep) * exit_price
+        pnl = cash_from_sale - stake - GAS_COST_USD
+        s["bankroll"] += pnl
+        s["peak"]      = max(s["peak"], s["bankroll"])
+        dd = (s["peak"] - s["bankroll"]) / s["peak"] * 100
+        s["max_dd_pct"] = max(s["max_dd_pct"], dd)
+        s["trades"] += 1
+        if pnl > 0: s["wins"] += 1
+        else:        s["losses"] += 1
+        binance_outcome = get_binance_outcome(t["window_start_ts"])
+        slug = t.get("slug", f"btc-updown-5m-{t['window_start_ts']}")
+        chain_outcome, _ = get_polymarket_resolution(slug, timeout_s=60)
+        if chain_outcome is None: chain_outcome = binance_outcome
+        with open(TRADES, "a", newline="") as f:
+            csv.writer(f).writerow([
+                datetime.fromtimestamp(t["window_start_ts"], tz=timezone.utc).isoformat(),
+                datetime.fromtimestamp(close_ts, tz=timezone.utc).isoformat(),
+                t["direction"], t["tier"],
+                f"{t['stake_intended']:.4f}", f"{stake:.4f}",
+                f"{ep:.4f}", f"{t['best_ask']:.4f}", f"{t['best_bid']:.4f}",
+                f"{t['spread']:.4f}", f"{t['book_depth_usd']:.2f}",
+                t["levels_walked"], f"{t['filled_ratio']:.4f}",
+                binance_outcome, chain_outcome,
+                0, f"{pnl:+.4f}", f"{s['bankroll']:.4f}",
+                f"{t['latency_ms']}", t["fill_source"],
+                "early_exit", exit_type, f"{exit_price:.4f}", exit_age,
+            ])
+        log(f"EXIT  {exit_type}  {t['tier']}  entry={ep:.3f} exit={exit_price:.3f}  "
+            f"age={exit_age}s  pnl={pnl:+.3f}  bankroll=${s['bankroll']:.2f}  "
+            f"WR={s['wins']}/{s['trades']}={s['wins']/max(s['trades'],1):.1%}  DD={dd:.1f}%")
+        s["open_trade"] = None
+        save_state(s)
+        return
+
+    # No early exit fired — wait for expiry
     sleep_s = max(0, close_ts + 5 - time.time())
     if sleep_s > 0:
         log(f"WAIT  open {t['tier']} resolves in {sleep_s:.0f}s")
@@ -502,6 +576,7 @@ def resolve_open_trade(s):
             binance_outcome, chain_outcome,
             int(basis_flip), f"{pnl:+.4f}", f"{s['bankroll']:.4f}",
             f"{t['latency_ms']}", t["fill_source"], resolve_source,
+            "expiry", "", "",
         ])
     log(f"RESOLVE  {t['tier']}  pred={t['direction']:+}  "
         f"bin={binance_outcome:+} chain={chain_outcome:+}{'(FLIP!)' if basis_flip else ''}  "
@@ -520,9 +595,9 @@ def main():
         s["latency_ms_median"] = round(lat, 1)
         global LATENCY_MS
         LATENCY_MS = lat
-    log(f"BOOT  bankroll=${s['bankroll']:.2f}  trades={s['trades']}  "
-        f"wins={s['wins']}  reach={s['polymarket_reachable']}  "
-        f"lat_ms={s.get('latency_ms_median')}")
+    log(f"BOOT[EXIT]  bankroll=${s['bankroll']:.2f}  trades={s['trades']}  "
+        f"wins={s['wins']}  SL={SL_MID_THRESHOLD}  TP={TP_MID_THRESHOLD}  "
+        f"reach={s['polymarket_reachable']}  lat_ms={s.get('latency_ms_median')}")
     save_state(s)
 
     while True:
