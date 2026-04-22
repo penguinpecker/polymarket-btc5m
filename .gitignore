@@ -20,3 +20,5 @@ equity_curve_polymarket.csv
 pm_data/
 pm_live/
 paper/trades.csv.bak
+paper_exit/
+paper_exit_bot.out
