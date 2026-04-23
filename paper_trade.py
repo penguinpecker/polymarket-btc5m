@@ -301,6 +301,7 @@ def compute_signal(bars):
     sigma  = (sum((r-mean)**2 for r in last24)/24)**0.5 or 1e-6
     z_prev = ret_1 / sigma
     ret_12 = (closes[-1] / closes[-13]) - 1 if len(closes) >= 14 else 0
+    ret_48 = (closes[-1] / closes[-49]) - 1 if len(closes) >= 50 else 0   # 4h trend
     br_1   = brs[-1]
     vol_1  = vols[-1]
     vwin   = vols[-288:] if len(vols) >= 288 else vols
@@ -309,19 +310,29 @@ def compute_signal(bars):
     vol_z  = (vol_1 - vma) / vsd
     hour   = datetime.fromtimestamp(bars[-1]["open_time"]/1000, tz=timezone.utc).hour
 
-    diag = {"z":round(z_prev,2),"r12":round(ret_12,4),"br":round(br_1,3),
-            "vz":round(vol_z,2),"h":hour}
+    diag = {"z":round(z_prev,2),"r12":round(ret_12,4),"r48":round(ret_48,4),
+            "br":round(br_1,3),"vz":round(vol_z,2),"h":hour}
 
     if hour in LOW_LIQ_HOURS:   return None, 0, "skip_hour",   diag
     if abs(vol_z) > 4:          return None, 0, "skip_volext", diag
+
+    # BEAR-MARKET FILTER (observed 2026-04-23, 20 UP trades 40% WR vs 21 DOWN 57% WR).
+    # Mean-reversion UP bets fail during sustained selloffs (bear capitulation
+    # > reversion at 5m scale). Skip UP direction if 4h return < -1.5%.
+    BEAR_R48 = -0.015
+    bear_regime = ret_48 < BEAR_R48
+
     if z_prev >  3.0: return -1, 0.020, "A-z>3-DOWN",  diag
-    if z_prev < -3.0: return +1, 0.020, "A-z<-3-UP",   diag
+    if z_prev < -3.0:
+        if bear_regime: return None, 0, "skip_bear_regime_A", diag
+        return +1, 0.020, "A-z<-3-UP",   diag
     # Tier B DISABLED after 0/5 live (p=2% at historical 54%) — refusing to trade on that.
-    # Re-enable by un-commenting once data shows recovery in historical scan.
     # if z_prev >  2.0: return -1, 0.015, "B-z>2-DOWN",  diag
     # if z_prev < -2.0: return +1, 0.015, "B-z<-2-UP",   diag
     if ret_12 >  0.005 and br_1 > 0.55: return -1, 0.010, "C-trend+tbd-DOWN", diag
-    if ret_12 < -0.005 and br_1 < 0.45: return +1, 0.010, "C-trend+tbd-UP",   diag
+    if ret_12 < -0.005 and br_1 < 0.45:
+        if bear_regime: return None, 0, "skip_bear_regime_C", diag
+        return +1, 0.010, "C-trend+tbd-UP",   diag
     return None, 0, "no_signal", diag
 
 def next_5m_boundary(dt=None):
