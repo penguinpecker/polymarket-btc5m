@@ -73,7 +73,7 @@ STATE  = ROOT / "state.json"
 TRADES = ROOT / "trades.csv"
 LOG    = ROOT / "tick.log"
 
-BINANCE = "https://api.binance.com/api/v3/klines"
+BINANCE = "https://data-api.binance.vision/api/v3/klines"  # public CDN — works from US-region hosts (api.binance.com returns 451)
 GAMMA   = "https://gamma-api.polymarket.com"
 CLOB    = "https://clob.polymarket.com"
 
