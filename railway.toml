@@ -3,6 +3,6 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "python paper_trade.py"
+startCommand = "/app/railway-start.sh"
 restartPolicyType = "ALWAYS"
 restartPolicyMaxRetries = 10
