@@ -9,6 +9,7 @@ paper/trades.csv
 paper/tick.log
 paper/bot.out
 paper/bot.err
+paper/bot.pid
 
 # large data files
 btcusdt_5m.csv

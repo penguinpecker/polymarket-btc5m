@@ -1,0 +1,8 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python paper_trade.py"
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 10

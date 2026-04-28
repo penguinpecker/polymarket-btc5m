@@ -1,0 +1,14 @@
+.git/
+.gitignore
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+paper/
+paper_exit/
+pm_data/
+pm_live/
+*.csv
+*.parquet
+*.bak
+README.md
