@@ -34,7 +34,7 @@ State files:
   paper/trades.csv     one row per closed trade, 18 columns
   paper/tick.log       human-readable event stream
 """
-import json, time, csv, pathlib, sys, socket, statistics
+import json, time, csv, os, pathlib, sys, socket, statistics
 from datetime import datetime, timezone, timedelta
 import requests
 
@@ -131,6 +131,107 @@ TRADES_HEADER = [
 if not TRADES.exists():
     with open(TRADES, "w", newline="") as f:
         csv.writer(f).writerow(TRADES_HEADER)
+
+# ---------- Postgres durable storage (optional — only if DATABASE_URL is set) ----------
+DB_URL = os.environ.get("DATABASE_URL")
+try:
+    import psycopg2
+    import psycopg2.extras
+    HAS_PG = bool(DB_URL)
+except ImportError:
+    HAS_PG = False
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS trades (
+  open_time_utc     TIMESTAMPTZ PRIMARY KEY,
+  close_time_utc    TIMESTAMPTZ,
+  direction         SMALLINT,
+  tier              TEXT,
+  stake_intended    NUMERIC,
+  stake_filled      NUMERIC,
+  vwap              NUMERIC,
+  best_ask          NUMERIC,
+  best_bid          NUMERIC,
+  spread            NUMERIC,
+  book_depth_usd    NUMERIC,
+  levels_walked     INT,
+  filled_ratio      NUMERIC,
+  binance_outcome   SMALLINT,
+  chainlink_outcome SMALLINT,
+  basis_flip        SMALLINT,
+  pnl               NUMERIC,
+  bankroll_after    NUMERIC,
+  latency_ms        NUMERIC,
+  fill_source       TEXT,
+  resolve_source    TEXT,
+  recorded_at       TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS bot_state (
+  id          INT PRIMARY KEY DEFAULT 1,
+  state       JSONB NOT NULL,
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+"""
+
+_INSERT_TRADE = """
+INSERT INTO trades (open_time_utc, close_time_utc, direction, tier,
+    stake_intended, stake_filled, vwap, best_ask, best_bid, spread,
+    book_depth_usd, levels_walked, filled_ratio, binance_outcome,
+    chainlink_outcome, basis_flip, pnl, bankroll_after, latency_ms,
+    fill_source, resolve_source)
+VALUES (%s,%s,%s,%s, %s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+ON CONFLICT (open_time_utc) DO NOTHING
+"""
+
+def _db_conn():
+    if not HAS_PG: return None
+    try:
+        return psycopg2.connect(DB_URL, connect_timeout=5)
+    except Exception as e:
+        print(f"[db] connect failed: {e}", flush=True); return None
+
+def db_init_and_backfill():
+    conn = _db_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(_DDL)
+        if TRADES.exists():
+            with open(TRADES) as f:
+                rows = [tuple(r) for r in csv.reader(f)][1:]   # skip header
+            if rows:
+                with conn, conn.cursor() as cur:
+                    psycopg2.extras.execute_batch(cur, _INSERT_TRADE, rows)
+                print(f"[db] backfill: {len(rows)} rows from trades.csv (idempotent UPSERT)", flush=True)
+    except Exception as e:
+        print(f"[db] init/backfill failed: {e}", flush=True)
+    finally:
+        conn.close()
+
+def db_record_trade(row):
+    conn = _db_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(_INSERT_TRADE, row)
+    except Exception as e:
+        print(f"[db] record_trade failed: {e}", flush=True)
+    finally:
+        conn.close()
+
+def db_save_state(s):
+    conn = _db_conn()
+    if not conn: return
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO bot_state (id, state, updated_at) VALUES (1, %s, NOW())
+                ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()
+            """, (json.dumps(s),))
+    except Exception as e:
+        print(f"[db] save_state failed: {e}", flush=True)
+    finally:
+        conn.close()
 
 # ---------- market data helpers ----------
 def fetch_recent_klines(n=60, cutoff_ms=None):
@@ -501,19 +602,21 @@ def resolve_open_trade(s):
     slip_now  = (t["vwap"] - t["best_ask"]) * 10000 if t["best_ask"] else 0
     s["avg_slippage_bps_vs_top"] = ((prev_slip*(n-1)) + slip_now) / n
 
+    trade_row = [
+        datetime.fromtimestamp(t["window_start_ts"], tz=timezone.utc).isoformat(),
+        datetime.fromtimestamp(close_ts, tz=timezone.utc).isoformat(),
+        t["direction"], t["tier"],
+        f"{t['stake_intended']:.4f}", f"{t['stake_filled']:.4f}",
+        f"{t['vwap']:.4f}", f"{t['best_ask']:.4f}", f"{t['best_bid']:.4f}",
+        f"{t['spread']:.4f}", f"{t['book_depth_usd']:.2f}",
+        t["levels_walked"], f"{t['filled_ratio']:.4f}",
+        binance_outcome, chain_outcome,
+        int(basis_flip), f"{pnl:+.4f}", f"{s['bankroll']:.4f}",
+        f"{t['latency_ms']}", t["fill_source"], resolve_source,
+    ]
     with open(TRADES, "a", newline="") as f:
-        csv.writer(f).writerow([
-            datetime.fromtimestamp(t["window_start_ts"], tz=timezone.utc).isoformat(),
-            datetime.fromtimestamp(close_ts, tz=timezone.utc).isoformat(),
-            t["direction"], t["tier"],
-            f"{t['stake_intended']:.4f}", f"{t['stake_filled']:.4f}",
-            f"{t['vwap']:.4f}", f"{t['best_ask']:.4f}", f"{t['best_bid']:.4f}",
-            f"{t['spread']:.4f}", f"{t['book_depth_usd']:.2f}",
-            t["levels_walked"], f"{t['filled_ratio']:.4f}",
-            binance_outcome, chain_outcome,
-            int(basis_flip), f"{pnl:+.4f}", f"{s['bankroll']:.4f}",
-            f"{t['latency_ms']}", t["fill_source"], resolve_source,
-        ])
+        csv.writer(f).writerow(trade_row)
+    db_record_trade(trade_row)
     log(f"RESOLVE  {t['tier']}  pred={t['direction']:+}  "
         f"bin={binance_outcome:+} chain={chain_outcome:+}{'(FLIP!)' if basis_flip else ''}  "
         f"{'WIN' if win else ('TIE' if outcome==0 else 'LOSS')}  "
@@ -522,10 +625,12 @@ def resolve_open_trade(s):
         f"DD={dd:.1f}%  src={resolve_source}")
     s["open_trade"] = None
     save_state(s)
+    db_save_state(s)
 
 # ---------- main ----------
 def main():
     s = load_state()
+    db_init_and_backfill()
     lat = measure_latency()
     if lat is not None:
         s["latency_ms_median"] = round(lat, 1)
@@ -533,8 +638,9 @@ def main():
         LATENCY_MS = lat
     log(f"BOOT  bankroll=${s['bankroll']:.2f}  trades={s['trades']}  "
         f"wins={s['wins']}  reach={s['polymarket_reachable']}  "
-        f"lat_ms={s.get('latency_ms_median')}")
+        f"lat_ms={s.get('latency_ms_median')}  db={'on' if HAS_PG else 'off'}")
     save_state(s)
+    db_save_state(s)
 
     while True:
         try:
