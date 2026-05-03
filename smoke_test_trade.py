@@ -45,6 +45,7 @@ from pm_chain import (  # noqa: E402
     usdc_balance,
     is_resolved,
     redeem_positions,
+    safe_redeem_positions,
     wait_receipt,
 )
 
@@ -209,20 +210,52 @@ def main() -> None:
         time.sleep(15)
 
     log("on-chain resolved. Sending redeemPositions...")
-    bal_before = usdc_balance(w3, acct.address)
     index_set = 1 if DIRECTION == "UP" else 2
+    safe_addr = os.environ.get("LIVE_FUNDER")
     try:
-        tx = redeem_positions(w3, acct, cid, [index_set], gas_price_gwei_cap=GAS_GWEI_CAP)
+        if safe_addr:
+            # v2 path: outcome tokens live in the Safe, redeem via execTransaction.
+            # Winnings credit pUSD to the Safe (not USDC.e to the EOA), so we
+            # measure success by reading the Safe's pUSD balance via CLOB.
+            from pm_clob import make_client as _mc
+            from py_clob_client_v2 import BalanceAllowanceParams, AssetType
+            probe = _mc(
+                PK,
+                os.environ.get("LIVE_CLOB_API_KEY"),
+                os.environ.get("LIVE_CLOB_SECRET"),
+                os.environ.get("LIVE_CLOB_PASSPHRASE"),
+                signature_type_name=os.environ.get("LIVE_SIGNATURE_TYPE"),
+                funder=safe_addr,
+            )
+            r0 = probe.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            safe_pusd_before = int(r0.get("balance", "0")) / 1_000_000
+            tx = safe_redeem_positions(
+                w3, acct, safe_addr, cid, [index_set],
+                gas_price_gwei_cap=GAS_GWEI_CAP,
+            )
+            log(f"  redeem_tx (Safe execTransaction)={tx}")
+            rcpt = wait_receipt(w3, tx, timeout_s=180)
+            log(f"  receipt status={rcpt.get('status')}  gas_used={rcpt.get('gasUsed')}")
+            r1 = probe.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            safe_pusd_after = int(r1.get("balance", "0")) / 1_000_000
+            received = safe_pusd_after - safe_pusd_before
+            pnl = received - making
+            log(f"FINAL  Safe_pUSD before=${safe_pusd_before:.4f} after=${safe_pusd_after:.4f}  "
+                f"received=${received:.4f}  pnl_vs_stake=${pnl:+.4f}")
+        else:
+            # legacy v1 EOA-direct path (kept for compatibility — will no-op on v2)
+            bal_before = usdc_balance(w3, acct.address)
+            tx = redeem_positions(w3, acct, cid, [index_set], gas_price_gwei_cap=GAS_GWEI_CAP)
+            log(f"  redeem_tx={tx}")
+            rcpt = wait_receipt(w3, tx, timeout_s=180)
+            log(f"  receipt status={rcpt.get('status')}  gas_used={rcpt.get('gasUsed')}")
+            bal_after = usdc_balance(w3, acct.address)
+            received = bal_after - bal_before
+            pnl = received - making
+            log(f"FINAL  received=${received:.4f}  pnl_vs_stake=${pnl:+.4f}  USDC.e_now=${bal_after:.4f}")
     except Exception as e:
         log(f"REDEEM_ERR  {type(e).__name__}: {e}")
         sys.exit(8)
-    log(f"  redeem_tx={tx}")
-    rcpt = wait_receipt(w3, tx, timeout_s=180)
-    log(f"  receipt status={rcpt.get('status')}  gas_used={rcpt.get('gasUsed')}")
-    bal_after = usdc_balance(w3, acct.address)
-    received = bal_after - bal_before
-    pnl = received - making
-    log(f"FINAL  received=${received:.4f}  pnl_vs_stake=${pnl:+.4f}  USDC.e_now=${bal_after:.4f}")
 
 
 if __name__ == "__main__":
