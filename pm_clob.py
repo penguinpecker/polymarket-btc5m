@@ -13,6 +13,11 @@ derive them on first boot via create_or_derive_api_key().
 
 Secret hygiene: nothing logged.
 """
+import os
+import sys
+
+import httpx
+import py_clob_client_v2.http_helpers.helpers as _clob_http
 from py_clob_client_v2 import (
     ApiCreds,
     ClobClient,
@@ -25,6 +30,23 @@ from py_clob_client_v2 import (
 
 CLOB_HOST = "https://clob.polymarket.com"
 POLYGON_CHAIN_ID = 137
+
+# Route ALL py-clob-client-v2 HTTP traffic through CLOB_PROXY when set.
+# Polymarket geoblocks based on the egress IP; Railway's us-west2 is
+# blocked. Set CLOB_PROXY to a SOCKS5/HTTP proxy in an allowed
+# jurisdiction (most of EU, UAE, LATAM, India, etc.) to unblock the live
+# bot without migrating hosts. Other libraries (web3 RPC, psycopg2,
+# requests-based code) are unaffected.
+_CLOB_PROXY = os.getenv("CLOB_PROXY")
+if _CLOB_PROXY:
+    _clob_http._http_client = httpx.Client(http2=True, proxy=_CLOB_PROXY)
+    # Mask creds when logging the proxy URL.
+    _safe = _CLOB_PROXY
+    if "@" in _safe:
+        scheme, _, rest = _safe.partition("://")
+        _, _, host = rest.rpartition("@")
+        _safe = f"{scheme}://***@{host}"
+    print(f"[pm_clob] CLOB egress via proxy {_safe}", file=sys.stderr, flush=True)
 
 
 _SIG_TYPE_BY_NAME = {
