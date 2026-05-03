@@ -20,6 +20,8 @@ import httpx
 import py_clob_client_v2.http_helpers.helpers as _clob_http
 from py_clob_client_v2 import (
     ApiCreds,
+    AssetType,
+    BalanceAllowanceParams,
     ClobClient,
     MarketOrderArgs,
     OrderType,
@@ -144,6 +146,8 @@ def get_balance_allowance(client: ClobClient) -> dict:
     """USDC.e balance + collateral allowance via CLOB API.
     Useful as a sanity check that complements direct on-chain reads."""
     try:
-        return client.get_balance_allowance(params={"asset_type": "COLLATERAL"})
+        return client.get_balance_allowance(
+            params=BalanceAllowanceParams(asset_type=AssetType.COLLATERAL),
+        )
     except Exception as e:
         return {"error": repr(e)}
