@@ -32,6 +32,10 @@ NEG_RISK_EXCHANGE_V2    = Web3.to_checksum_address("0xe2222d279d744050d28e005200
 # Used for redemption on NegRisk markets (BTC-UpDown-5m is NOT NegRisk so
 # we don't currently redeem through this; kept for completeness).
 NEG_RISK_ADAPTER  = Web3.to_checksum_address("0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296")
+# Polymarket's CollateralOnramp — wraps USDC.e → pUSD via wrap(asset, to,
+# amount). CTF.redeemPositions credits raw USDC.e; we have to wrap it
+# back to pUSD afterward so the CLOB sees it as tradeable collateral.
+COLLATERAL_ONRAMP = Web3.to_checksum_address("0x93070a847efEf7F70739046A929D47a521F5B8ee")
 
 CHAIN_ID = 137
 
@@ -162,6 +166,15 @@ def pusd_balance(w3: Web3, owner: str) -> float:
     c = w3.eth.contract(address=PUSD_ADDR, abi=ERC20_ABI)
     raw = c.functions.balanceOf(Web3.to_checksum_address(owner)).call()
     return raw / (10 ** USDC_DECIMALS)
+
+
+def tradeable_collateral(w3: Web3, owner: str) -> float:
+    """pUSD + USDC.e on the address. Polymarket v2 CTF.redeemPositions
+    credits raw USDC.e; until it's wrapped to pUSD via the
+    CollateralOnramp, the CLOB doesn't count it as tradeable, but the
+    user's economic balance includes it. Use this for accounting deltas
+    around redemption (wrap step may run before or after the read)."""
+    return pusd_balance(w3, owner) + usdc_balance(w3, owner)
 
 
 def usdc_allowance(w3: Web3, owner: str, spender: str) -> float:
@@ -313,3 +326,84 @@ def safe_redeem_positions(
     signed_tx = account.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
     return tx_hash.hex()
+
+
+def safe_wrap_usdce(
+    w3: Web3, account, safe_address: str, amount_micro: int | None = None,
+    gas_price_gwei_cap: float = 300.0,
+) -> tuple[str | None, str | None]:
+    """Wrap the Safe's USDC.e holdings back into pUSD via the
+    CollateralOnramp. Two Safe execTransactions: approve the onramp,
+    then call wrap(USDC.e, Safe, amount).
+
+    `amount_micro` defaults to the Safe's full USDC.e balance. If the
+    Safe holds zero USDC.e, returns (None, None) without sending any
+    tx — making this safe to call unconditionally after redemption.
+
+    Returns (approve_tx_hash, wrap_tx_hash). Caller polls receipts.
+    """
+    safe = w3.eth.contract(address=Web3.to_checksum_address(safe_address), abi=SAFE_ABI)
+    usdce = w3.eth.contract(address=USDC_E_ADDR, abi=ERC20_ABI)
+
+    if amount_micro is None:
+        amount_micro = usdce.functions.balanceOf(safe_address).call()
+    if not amount_micro:
+        return (None, None)
+
+    onramp_abi = [{
+        "name": "wrap", "type": "function", "stateMutability": "nonpayable",
+        "inputs": [{"name": "_asset", "type": "address"},
+                   {"name": "_to", "type": "address"},
+                   {"name": "_amount", "type": "uint256"}],
+        "outputs": [],
+    }]
+    onramp = w3.eth.contract(address=COLLATERAL_ONRAMP, abi=onramp_abi)
+
+    def _safe_call(to_addr: str, data: bytes) -> str:
+        nonce = safe.functions.nonce().call()
+        h = safe.functions.getTransactionHash(
+            to_addr, 0, data, 0, 0, 0, 0, ZERO_ADDR, ZERO_ADDR, nonce,
+        ).call()
+        try:
+            sig = account.unsafe_sign_hash(h).signature
+        except AttributeError:
+            sig = account.signHash(h).signature
+        eoa_nonce = w3.eth.get_transaction_count(account.address)
+        gas_price = w3.eth.gas_price
+        cap = int(gas_price_gwei_cap * 1e9)
+        if gas_price > cap:
+            raise RuntimeError(f"gas_price {gas_price/1e9:.1f} gwei exceeds cap")
+        tx = safe.functions.execTransaction(
+            to_addr, 0, data, 0, 0, 0, 0, ZERO_ADDR, ZERO_ADDR, sig,
+        ).build_transaction({
+            "from": account.address,
+            "nonce": eoa_nonce,
+            "gasPrice": gas_price,
+            "chainId": CHAIN_ID,
+        })
+        try:
+            tx["gas"] = int(w3.eth.estimate_gas(tx) * 1.3)
+        except Exception:
+            tx["gas"] = 400_000
+        signed_tx = account.sign_transaction(tx)
+        return w3.eth.send_raw_transaction(signed_tx.raw_transaction).hex()
+
+    approve_data = usdce.encode_abi(
+        abi_element_identifier="approve",
+        args=[COLLATERAL_ONRAMP, int(amount_micro)],
+    )
+    h1 = _safe_call(USDC_E_ADDR, approve_data)
+    r1 = wait_receipt(w3, h1, timeout_s=120)
+    if r1.get("status") != 1:
+        raise RuntimeError(f"USDC.e approve via Safe failed: tx={h1}")
+
+    wrap_data = onramp.encode_abi(
+        abi_element_identifier="wrap",
+        args=[USDC_E_ADDR, Web3.to_checksum_address(safe_address), int(amount_micro)],
+    )
+    h2 = _safe_call(COLLATERAL_ONRAMP, wrap_data)
+    r2 = wait_receipt(w3, h2, timeout_s=120)
+    if r2.get("status") != 1:
+        raise RuntimeError(f"CollateralOnramp.wrap via Safe failed: tx={h2}")
+
+    return (h1, h2)

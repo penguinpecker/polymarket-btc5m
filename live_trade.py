@@ -84,6 +84,11 @@ API_PASS    = os.environ.get("LIVE_CLOB_PASSPHRASE", "")
 LIVE_FUNDER = os.environ.get("LIVE_FUNDER", "")
 LIVE_SIG_TYPE = os.environ.get("LIVE_SIGNATURE_TYPE", "EOA")
 
+# Seconds to wait into the 5m window before fetching the book + placing the
+# order. Paper bot uses 30 (conservative). Live can go lower since the
+# orderbook is typically well-seeded by ~T+5s post-cutover.
+LIVE_ENTRY_OFFSET_S = int(os.environ.get("LIVE_ENTRY_OFFSET_S", str(T_ENTRY_OFFSET_S)))
+
 DB_URL = os.environ.get("DATABASE_URL", "")
 try:
     import psycopg2
@@ -365,7 +370,7 @@ def try_enter_at_next_boundary(s: dict, positions: list) -> None:
         log(f"SKIP  ws={window_start}  {tier}  {diag}")
         return
 
-    obs_target = window_start + T_ENTRY_OFFSET_S
+    obs_target = window_start + LIVE_ENTRY_OFFSET_S
     remaining = obs_target - time.time()
     if remaining > 0:
         time.sleep(remaining)
@@ -569,6 +574,7 @@ def handle_open_position(pos: dict, s: dict, positions: list) -> None:
         # call CTF.redeemPositions directly from the EOA.
         from pm_chain import (
             is_resolved, redeem_positions, safe_redeem_positions,
+            safe_wrap_usdce, tradeable_collateral,
             wait_receipt, pusd_balance, usdc_balance,
         )
         try:
@@ -598,9 +604,14 @@ def handle_open_position(pos: dict, s: dict, positions: list) -> None:
                 while attempts_left > 0:
                     pos["redeem_attempts"] = pos.get("redeem_attempts", 0) + 1
                     try:
-                        # Read pUSD-on-Safe (v2) or USDC.e-on-EOA (v1) before redeem
+                        # On v2 (LIVE_FUNDER set), CTF.redeemPositions credits raw
+                        # USDC.e to the Safe — NOT pUSD. Read combined pUSD+USDC.e
+                        # so the recv delta captures the win regardless of which
+                        # asset received the credit. Then wrap any USDC.e back to
+                        # pUSD via the CollateralOnramp so the CLOB sees it as
+                        # tradeable for the next signal.
                         if LIVE_FUNDER:
-                            bal_before = pusd_balance(w3, LIVE_FUNDER)
+                            bal_before = tradeable_collateral(w3, LIVE_FUNDER)
                             tx_hash = safe_redeem_positions(
                                 w3, acct, LIVE_FUNDER, cid, [index_set],
                                 gas_price_gwei_cap=LIVE_REDEEM_GAS_GW,
@@ -619,7 +630,19 @@ def handle_open_position(pos: dict, s: dict, positions: list) -> None:
                             time.sleep(10)
                             continue
                         if LIVE_FUNDER:
-                            bal_after = pusd_balance(w3, LIVE_FUNDER)
+                            # Wrap any USDC.e the Safe just received back into
+                            # pUSD. No-op when the position lost (USDC.e=0).
+                            try:
+                                wrap_a, wrap_w = safe_wrap_usdce(
+                                    w3, acct, LIVE_FUNDER,
+                                    gas_price_gwei_cap=LIVE_REDEEM_GAS_GW,
+                                )
+                                if wrap_a:
+                                    log(f"WRAP_OK      {pos['id']}  approve={wrap_a[:10]}.. wrap={wrap_w[:10]}..")
+                            except Exception as e:
+                                log(f"WRAP_ERR     {pos['id']}  {type(e).__name__}: {e}  "
+                                    f"(USDC.e left unwrapped on Safe — manual recovery)")
+                            bal_after = tradeable_collateral(w3, LIVE_FUNDER)
                         else:
                             bal_after = usdc_balance(w3, acct.address)
                         received = bal_after - bal_before
