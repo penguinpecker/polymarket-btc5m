@@ -1,7 +1,19 @@
 #!/bin/sh
 # Railway entrypoint — seeds /app/paper from STATE_SEED_B64 (gz tarball, base64)
 # on first boot only, then exec's the bot. Volume marker (.seeded) prevents re-seed.
+#
+# When ROLE=live is set (live service only), hand off to the live entrypoint.
+# Default: ROLE unset -> paper bot (unchanged behavior for the existing service).
 set -e
+
+if [ "$ROLE" = "live" ]; then
+    exec /app/live-railway-start.sh
+fi
+
+if [ "$ROLE" = "sweeper" ]; then
+    echo "[sweeper] starting claim sweeper — redeems winning+losing tokens via Safe execTransaction, wraps USDC.e -> pUSD, retries forever"
+    exec python -u claim_sweeper.py
+fi
 
 mkdir -p /app/paper
 
