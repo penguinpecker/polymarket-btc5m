@@ -342,7 +342,8 @@ def safe_wrap_usdce(
 
     Returns (approve_tx_hash, wrap_tx_hash). Caller polls receipts.
     """
-    safe = w3.eth.contract(address=Web3.to_checksum_address(safe_address), abi=SAFE_ABI)
+    safe_address = Web3.to_checksum_address(safe_address)
+    safe = w3.eth.contract(address=safe_address, abi=SAFE_ABI)
     usdce = w3.eth.contract(address=USDC_E_ADDR, abi=ERC20_ABI)
 
     if amount_micro is None:

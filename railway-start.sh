@@ -10,6 +10,11 @@ if [ "$ROLE" = "live" ]; then
     exec /app/live-railway-start.sh
 fi
 
+if [ "$ROLE" = "sweeper" ]; then
+    echo "[sweeper] starting claim sweeper — redeems winning+losing tokens via Safe execTransaction, wraps USDC.e -> pUSD, retries forever"
+    exec python -u claim_sweeper.py
+fi
+
 mkdir -p /app/paper
 
 if [ -n "$STATE_SEED_B64" ] && [ ! -f /app/paper/.seeded ]; then
