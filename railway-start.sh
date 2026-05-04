@@ -1,16 +1,16 @@
 #!/bin/sh
-# Railway entrypoint — seeds /app/paper from STATE_SEED_B64 (gz tarball, base64)
-# on first boot only, then exec's the bot. Volume marker (.seeded) prevents re-seed.
+# Railway entrypoint — dispatches to live trader or claim sweeper based on
+# ROLE env var.
 set -e
 
-mkdir -p /app/paper
-
-if [ -n "$STATE_SEED_B64" ] && [ ! -f /app/paper/.seeded ]; then
-    echo "[seed] migrating state from STATE_SEED_B64 ($(echo "$STATE_SEED_B64" | wc -c) bytes b64)"
-    echo "$STATE_SEED_B64" | base64 -d | tar xz -C /app/paper
-    touch /app/paper/.seeded
-    echo "[seed] migrated:"
-    ls -la /app/paper/
+if [ "$ROLE" = "live" ]; then
+    exec /app/live-railway-start.sh
 fi
 
-exec python -u paper_trade.py
+if [ "$ROLE" = "sweeper" ]; then
+    echo "[sweeper] starting claim sweeper — redeems winning+losing tokens via Safe execTransaction, wraps USDC.e -> pUSD, retries forever"
+    exec python -u claim_sweeper.py
+fi
+
+echo "[entrypoint] FATAL: unknown ROLE='$ROLE' — set ROLE=live or ROLE=sweeper" >&2
+exit 2

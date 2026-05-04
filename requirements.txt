@@ -1,2 +1,10 @@
 requests>=2.31
 psycopg2-binary>=2.9
+# live trader (optional but harmless on the paper service).
+# Polymarket migrated to CLOB v2 on 2026-04-30; the legacy py-clob-client
+# now returns 'order_version_mismatch' on every order. py-clob-client-v2
+# is the supported client for v2.
+# py-clob-client-v2 requires eth-account>=0.13 (hexbytes>=1.2) which
+# forces web3>=7 (web3 6.x caps hexbytes<0.4 and conflicts).
+py-clob-client-v2>=1.0.0
+web3>=7,<8

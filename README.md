@@ -1,6 +1,6 @@
 # polymarket-btc5m
 
-Contrarian paper-trading bot + backtest harness for Polymarket's **Bitcoin Up or Down — 5 minutes** markets.
+Contrarian live trading bot for Polymarket's **Bitcoin Up or Down — 5 minutes** markets.
 
 ## Strategy
 
@@ -10,45 +10,43 @@ against crowded same-direction flow.
 | Tier | Trigger | Size | Historical WR |
 |---|---|---|---|
 | A | `|z_prev| > 3σ` | 2.0% bankroll | ~59% |
-| B | `|z_prev| > 2σ` | 1.5% bankroll | ~54% |
 | C | `1h trend ± 0.5%` + aligned taker-buy | 1.0% bankroll | ~56% |
 
 Filters: skip 03–06 UTC; skip vol-spikes `|vol_z|>4`; skip spread > 4c; skip same-side depth < $300.
+Bear-market regime filter (4h return < -1.5%) blocks UP bets.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `paper_trade.py` | Live paper bot — full orderbook walk, Polymarket resolution, latency model, depth-scaled stake, partial fills |
-| `status.py` | Status reader (bankroll, WR, DD, basis flips, slippage stats) |
+| `live_trade.py` | Live trader — CLOB orders, on-chain redeem, bankroll reconcile vs chain |
+| `signal_lib.py` | Signal + market-data library (book walk, Polymarket resolution, Binance outcome) |
+| `claim_sweeper.py` | Background service: redeems winning + losing tokens via Safe execTransaction; wraps USDC.e → pUSD |
+| `pm_chain.py` | Polygon RPC + CTF / Safe contract bindings |
+| `pm_clob.py` | Polymarket CLOB v2 client wrapper |
+| `reconcile.py` | Standalone bankroll vs on-chain reconcile tool |
+| `setup_wallet.py`, `setup_approvals.py` | One-time wallet + approvals bootstrap |
+| `bridge_to_safe.py` | Top up the Polymarket Safe via Relay (USDC.e → pUSD) |
 | `download.py` | Pull 6mo of Binance BTCUSDT 5m klines |
 | `diagnose.py` | Feature-by-feature win-rate scan |
-| `backtest.py`, `backtest_v2.py`, `backtest_final.py` | Historical backtest variants |
-| `collect_polymarket.py` | Pull Polymarket CLOB trades via Gamma+Data APIs (needs non-India DNS) |
-| `record_live.py` | Live CLOB websocket recorder |
-| `backtest_polymarket.py` | Replay strategy on real Polymarket fills |
+| `collect_polymarket.py` | Pull Polymarket CLOB trades via Gamma + Data APIs |
 | `dune_query.sql` | Dune Analytics query for on-chain CTF-Exchange fills |
 
-## Run the paper bot
+## Run
 
-```bash
-source venv/bin/activate
-nohup caffeinate -ims python paper_trade.py > paper/bot.out 2>&1 & disown
-python status.py           # anytime
-tail -f paper/tick.log
-```
+The live bot runs as the Railway service `polymarket-btc5m-live`. Push to `live-trader-v1`
+and `railway redeploy --service polymarket-btc5m-live` to deploy.
 
 ## Real-world factors modeled
 
 - **Chainlink resolution** via Polymarket Gamma `outcomePrices` (Binance recorded as control)
 - **Full book walk** with VWAP fill, top-of-book slippage, levels consumed
 - **Depth cap**: max 10% of same-side notional depth
-- **Partial fills** flagged when filled_ratio < 0.5
-- **Latency offset**: median India→Polymarket RTT (~250ms) shifts observation time
 - **Spread filter**: skip if `best_ask − best_bid > 4c`
 - **Liquidity filter**: skip if same-side depth < $300
-- **Gas**: flat $0.01 per trade
-- **Basis flips**: tracks Chainlink ≠ Binance outcome disagreements
+- **Bankroll reconcile**: at boot and after each FINAL, the bot verifies its
+  internal bankroll against on-chain pUSD on the Safe + locked stake in any
+  open position. Drift logged as `RECONCILE`.
 - **ISP bypass**: DoH resolution of `*.polymarket.com` (India ISPs sinkhole it)
 
 ## Data source for resolution
