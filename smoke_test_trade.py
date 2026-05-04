@@ -31,8 +31,8 @@ if ENV.exists():
 # Default to a working RPC (polygon-rpc.com 401s)
 os.environ.setdefault("POLYGON_RPC", "https://1rpc.io/matic")
 
-# Imports after env is set. paper_trade applies DoH DNS bypass on import.
-from paper_trade import (  # noqa: E402
+# Imports after env is set. signal_lib applies DoH DNS bypass on import.
+from signal_lib import (  # noqa: E402
     fetch_book,
     get_market_by_slug,
     get_polymarket_resolution,

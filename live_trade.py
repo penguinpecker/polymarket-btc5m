@@ -31,9 +31,7 @@ import pathlib
 import traceback
 from datetime import datetime, timezone
 
-# Shared signal logic with paper — DO NOT duplicate it. The byte-identical
-# signal is the whole point of the comparison.
-from paper_trade import (
+from signal_lib import (
     compute_signal,
     fetch_recent_klines,
     fetch_book,
@@ -144,6 +142,71 @@ def load_positions() -> list:
 
 def save_positions(ps: list) -> None:
     POSITIONS.write_text(json.dumps(ps, indent=2))
+
+
+# ---------- chain reconcile ----------
+# Bot's `bankroll` is an internal accumulator: start_bankroll + Σrealized_pnl.
+# Chain truth: pUSD + USDC.e on the Safe, plus stake_filled locked in any
+# currently-open position (still in outcome tokens, not yet redeemed).
+# Identity:  bankroll == chain_collateral + locked_in_open
+def _open_locked_usd(positions: list) -> float:
+    OPEN = {"filled", "resolved"}
+    return sum(float(p.get("stake_filled", 0.0)) for p in positions
+               if p.get("status") in OPEN)
+
+
+def reconcile_with_chain(s: dict, positions: list, mode: str = "check") -> dict:
+    """Compare bot bankroll against on-chain collateral + open-position lock.
+
+    mode="boot":      auto-init start/peak/bankroll from chain if state is
+                      pristine (trades==0 and bankroll still at $100 default).
+                      Otherwise behaves like "check".
+    mode="post_final" / "check": just log the diff.
+    Returns dict with chain_usd, locked_usd, expected_bankroll, drift.
+    """
+    try:
+        from pm_chain import tradeable_collateral
+        w3, _acct = get_chain()
+        owner = LIVE_FUNDER if LIVE_FUNDER else _acct.address
+        chain_usd = tradeable_collateral(w3, owner)
+    except Exception as e:
+        log(f"RECONCILE_ERR  mode={mode}  {type(e).__name__}: {e}")
+        return {}
+
+    locked = _open_locked_usd(positions)
+    expected = chain_usd + locked
+    drift = round(s["bankroll"] - expected, 4)
+
+    pristine = (mode == "boot"
+                and s.get("trades", 0) == 0
+                and abs(s.get("bankroll", 0) - 100.0) < 1e-9
+                and abs(s.get("start_bankroll", 0) - 100.0) < 1e-9)
+    force = (mode == "boot"
+             and os.environ.get("LIVE_RECONCILE_FORCE", "").lower() == "true")
+    if (pristine or force) and chain_usd > 0:
+        if force:
+            realized_sum = sum(float(p.get("realized_pnl", 0.0)) for p in positions
+                               if p.get("status") not in {"filled", "resolved"})
+            new_start = round(expected - realized_sum, 4)
+            s["start_bankroll"] = new_start
+            s["bankroll"]       = round(expected, 4)
+            s["peak"]           = max(round(s.get("peak", 0), 4), s["bankroll"])
+            log(f"RECONCILE_FORCE mode=boot  set bankroll=${s['bankroll']:.4f} "
+                f"start=${new_start:.4f} (realized_sum=${realized_sum:.4f})")
+        else:
+            s["start_bankroll"] = round(chain_usd, 4)
+            s["bankroll"]       = round(chain_usd, 4)
+            s["peak"]           = round(chain_usd, 4)
+            log(f"RECONCILE_INIT  mode=boot  set start=bankroll=peak=${chain_usd:.4f} from chain")
+        save_state(s)
+        db_save_state(s)
+        drift = 0.0
+
+    log(f"RECONCILE  mode={mode}  chain=${chain_usd:.4f}  locked=${locked:.4f}  "
+        f"expected=${expected:.4f}  bankroll=${s['bankroll']:.4f}  "
+        f"drift=${drift:+.4f}")
+    return {"chain_usd": chain_usd, "locked_usd": locked,
+            "expected_bankroll": expected, "drift": drift}
 
 
 TRADES_HEADER = [
@@ -722,6 +785,9 @@ def handle_open_position(pos: dict, s: dict, positions: list) -> None:
         f"WR={s['wins']}/{s['trades']}={s['wins']/max(s['trades'],1):.1%}  "
         f"DD={dd:.1f}%  src={pos.get('resolve_source','?')}")
 
+    if LIVE_ENABLED:
+        reconcile_with_chain(s, positions, mode="post_final")
+
 
 # ---------- main ----------
 def main() -> None:
@@ -745,6 +811,7 @@ def main() -> None:
                 log(f"FUNDER  addr={LIVE_FUNDER}  pUSD=${pusd_balance(w3, LIVE_FUNDER):.4f}")
             get_clob()
             log("CLOB    ready")
+            reconcile_with_chain(s, positions, mode="boot")
         except Exception as e:
             log(f"BOOT_FAIL  {type(e).__name__}: {e}")
             log(traceback.format_exc())

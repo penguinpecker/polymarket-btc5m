@@ -27,9 +27,9 @@ from datetime import datetime, timezone
 
 import requests
 
-# DoH DNS bypass for *.polymarket.com — same trick paper_trade uses, since
-# Indian residential DNS hijacks the domain. Harmless on Railway.
-import paper_trade  # noqa: F401
+# DoH DNS bypass for *.polymarket.com (Indian residential DNS hijacks the
+# domain; harmless on Railway). Importing signal_lib applies the patch.
+import signal_lib  # noqa: F401
 
 from pm_chain import (
     make_w3, load_account, usdc_balance, pusd_balance,

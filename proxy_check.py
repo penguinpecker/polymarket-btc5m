@@ -40,12 +40,12 @@ if ENV.exists():
 
 import httpx  # noqa: E402
 
-# paper_trade applies a socket.getaddrinfo DoH patch for *.polymarket.com
+# signal_lib applies a socket.getaddrinfo DoH patch for *.polymarket.com
 # at import time — needed when the local ISP DNS-blocks the host (Indian
 # residential ISPs commonly do this). Harmless on Railway / unblocked
 # networks. Import before pm_clob so the patch is live by the time
 # httpx hits CLOB.
-import paper_trade  # noqa: F401, E402
+import signal_lib  # noqa: F401, E402
 
 from pm_clob import make_client, get_balance_allowance  # noqa: E402
 
