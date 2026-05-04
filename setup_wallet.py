@@ -25,7 +25,7 @@ import socket
 import pathlib
 
 # DoH-based DNS bypass for ISPs that hijack polymarket.com lookups.
-# Same trick signal_lib.py uses; needed for create_or_derive_api_creds()
+# Same trick signal_lib uses; needed for create_or_derive_api_creds()
 # which hits clob.polymarket.com via httpx.
 try:
     import requests as _r

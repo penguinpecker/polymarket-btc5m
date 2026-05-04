@@ -1,12 +1,9 @@
 #!/bin/sh
 # Railway entrypoint for the LIVE service.
 #
-# Differs from railway-start.sh (paper) in three ways:
-#   1. Volume mounted at /app/live, not /app/paper.
-#   2. NO STATE_SEED_B64 — live state must NEVER be seeded; it's authored
-#      from real on-chain reality. If the volume is empty, live_trade.py
-#      starts at the canonical $100 paper-equivalent baseline.
-#   3. Refuses to boot if both LIVE_ENABLED=true AND core secrets missing.
+# Volume mounted at /app/live. Refuses to boot if LIVE_ENABLED=true but
+# core secrets are missing. Bankroll is reconciled to on-chain state at
+# boot (see live_trade.reconcile_with_chain).
 set -e
 
 mkdir -p /app/live

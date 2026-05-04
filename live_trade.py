@@ -1,11 +1,8 @@
 """
-Live trading bot — same signal as paper, real Polymarket CLOB orders +
-on-chain redemption. Runs as a sibling Railway service to the paper bot.
-
-Loop structure mirrors paper exactly: enter at next 5m boundary -> wait
-for window close -> resolve outcome -> if win, redeem on-chain -> record
-trade -> repeat. One open position at a time (same as paper) so the
-trade cadence is identical for clean side-by-side PnL comparison.
+Live trading bot — Polymarket BTC-UpDown-5m. Real CLOB orders + on-chain
+redemption. Loop: enter at next 5m boundary -> wait for window close ->
+resolve outcome -> if win, redeem on-chain -> record trade -> repeat.
+One open position at a time.
 
 Safety / kill switches
 ----------------------
@@ -14,9 +11,8 @@ LIVE_DAILY_LOSS_KILL=$30       — stop entries if today's realized PnL ≤ -$30
 LIVE_TOTAL_DD_KILL=$50         — stop entries if bankroll < peak - $50.
 LIVE_MIN_BALANCE=$5            — stop entries if USDC.e wallet balance < $5.
 
-Divergence with paper: when live can't fill (no liquidity, balance fail,
-API error) we LOG and SKIP, never retry the same window — so PnL deltas
-isolate to fill quality, not retry timing.
+When live can't fill (no liquidity, balance fail, API error) we LOG and
+SKIP, never retry the same window.
 
 Secrets — Railway env only, never logged, never written to volume:
   LIVE_PRIVATE_KEY, LIVE_CLOB_API_KEY, LIVE_CLOB_SECRET,
@@ -82,9 +78,9 @@ API_PASS    = os.environ.get("LIVE_CLOB_PASSPHRASE", "")
 LIVE_FUNDER = os.environ.get("LIVE_FUNDER", "")
 LIVE_SIG_TYPE = os.environ.get("LIVE_SIGNATURE_TYPE", "EOA")
 
-# Seconds to wait into the 5m window before fetching the book + placing the
-# order. Paper bot uses 30 (conservative). Live can go lower since the
-# orderbook is typically well-seeded by ~T+5s post-cutover.
+# Seconds to wait into the 5m window before fetching the book + placing
+# the order. Default 30 (conservative); can go lower since the orderbook
+# is typically well-seeded by ~T+5s post-cutover.
 LIVE_ENTRY_OFFSET_S = int(os.environ.get("LIVE_ENTRY_OFFSET_S", str(T_ENTRY_OFFSET_S)))
 
 DB_URL = os.environ.get("DATABASE_URL", "")
@@ -624,8 +620,8 @@ def handle_open_position(pos: dict, s: dict, positions: list) -> None:
         expected_pnl = -stake - GAS_COST_USD
     pos["expected_pnl"] = round(expected_pnl, 4)
 
-    # 2) Redeem if winner. Loser/tie tokens are worthless — paper accounting
-    #    and live accounting agree: PnL = -stake (or 0 on tie). No tx needed.
+    # 2) Redeem if winner. Loser/tie tokens are worthless: PnL = -stake
+    #    (or 0 on tie). No tx needed.
     redeem_tx = ""
     realized_pnl = expected_pnl
     redeem_status = None

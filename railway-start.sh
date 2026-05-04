@@ -1,7 +1,6 @@
 #!/bin/sh
 # Railway entrypoint — dispatches to live trader or claim sweeper based on
-# ROLE env var. The legacy paper-bot path was removed on 2026-05-04 (paper
-# service decommissioned).
+# ROLE env var.
 set -e
 
 if [ "$ROLE" = "live" ]; then
