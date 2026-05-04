@@ -116,11 +116,18 @@ def place_market_buy_fok(
     client: ClobClient, token_id: str, notional_usd: float,
     tick_size: str = "0.01",
 ) -> dict:
-    """Place a marketable BUY — Fill-Or-Kill against current asks.
+    """Place a marketable BUY — Fill-And-Kill (partial fill OK, rest cancelled).
 
-    `notional_usd` is in USDC. Returns the raw response dict; caller
-    should inspect resp.get('success'), resp.get('makingAmount'),
-    resp.get('takingAmount').
+    Originally Fill-Or-Kill; switched to FAK 2026-05-04 because BTC-UpDown-5m
+    contrarian DOWN signals frequently fire when the bid side is thin and
+    FOK kills the order entirely. FAK fills as much as possible at top
+    levels and cancels the unfilled remainder. Caller must read
+    `resp['makingAmount']` (actual stake spent) + `resp['takingAmount']`
+    (actual shares received) to size the position correctly — partial
+    fills are common.
+
+    `notional_usd` is the *target* notional in USDC; the realized notional
+    will be ≤ this.
 
     BTC-UpDown-5m markets have orderPriceMinTickSize=0.01, hence the
     default. Override if the target market reports a different tick.
@@ -129,12 +136,12 @@ def place_market_buy_fok(
         token_id=token_id,
         amount=float(notional_usd),
         side=Side.BUY,
-        order_type=OrderType.FOK,
+        order_type=OrderType.FAK,
     )
     return client.create_and_post_market_order(
         order_args=args,
         options=PartialCreateOrderOptions(tick_size=tick_size),
-        order_type=OrderType.FOK,
+        order_type=OrderType.FAK,
     )
 
 
