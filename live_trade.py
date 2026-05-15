@@ -10,6 +10,9 @@ LIVE_ENABLED=false (default)   — shadow mode: logs intended order, never posts
 LIVE_DAILY_LOSS_KILL=$30       — stop entries if today's realized PnL ≤ -$30.
 LIVE_TOTAL_DD_KILL=$50         — stop entries if bankroll < peak - $50.
 LIVE_MIN_BALANCE=$5            — stop entries if USDC.e wallet balance < $5.
+LIVE_KILL_COOLDOWN_HOURS=12    — auto-lift kill after this many hours; resets
+                                 peak to current bankroll so drawdown clears.
+                                 Legacy kills with no killed_at stay sticky.
 
 When live can't fill (no liquidity, balance fail, API error) we LOG and
 SKIP, never retry the same window.
@@ -59,6 +62,7 @@ LIVE_ENABLED       = os.environ.get("LIVE_ENABLED", "false").lower() == "true"
 LIVE_STAKE_USD     = float(os.environ.get("LIVE_STAKE_USD", "5.0"))
 LIVE_DAILY_LOSS    = float(os.environ.get("LIVE_DAILY_LOSS_KILL", "30.0"))
 LIVE_TOTAL_DD_KILL = float(os.environ.get("LIVE_TOTAL_DD_KILL", "50.0"))
+LIVE_KILL_COOLDOWN_H = float(os.environ.get("LIVE_KILL_COOLDOWN_HOURS", "12.0"))
 LIVE_MIN_BALANCE   = float(os.environ.get("LIVE_MIN_BALANCE", "5.0"))
 LIVE_REDEEM_GAS_GW = float(os.environ.get("LIVE_REDEEM_GAS_GWEI_CAP", "300"))
 LIVE_MAX_REDEEM_TRIES = int(os.environ.get("LIVE_MAX_REDEEM_TRIES", "5"))
@@ -121,6 +125,7 @@ def load_state() -> dict:
         "max_dd_pct":      0.0,
         "daily_pnl":       {},
         "killed_by":       None,
+        "killed_at":       None,
         "shadow_skips":    0,
         "fill_failures":   0,
     }
@@ -376,15 +381,35 @@ def get_clob():
 # ---------- kill switches ----------
 def check_kill_switches(s: dict) -> str | None:
     if s.get("killed_by"):
-        return s["killed_by"]
+        killed_at_iso = s.get("killed_at")
+        if killed_at_iso and LIVE_KILL_COOLDOWN_H > 0:
+            try:
+                killed_at = datetime.fromisoformat(killed_at_iso)
+                age_h = (datetime.now(timezone.utc) - killed_at).total_seconds() / 3600.0
+            except (ValueError, TypeError):
+                age_h = None
+            if age_h is not None and age_h >= LIVE_KILL_COOLDOWN_H:
+                prev_kill = s["killed_by"]
+                prev_peak = s["peak"]
+                s["peak"] = round(s["bankroll"], 4)
+                s["killed_by"] = None
+                s["killed_at"] = None
+                log(f"KILL_LIFT  was={prev_kill}  age={age_h:.1f}h  "
+                    f"peak=${prev_peak:.2f}->${s['peak']:.2f}  bankroll=${s['bankroll']:.2f}")
+            else:
+                return s["killed_by"]
+        else:
+            return s["killed_by"]
     today = datetime.now(timezone.utc).date().isoformat()
     today_pnl = s.get("daily_pnl", {}).get(today, 0.0)
     if today_pnl <= -LIVE_DAILY_LOSS:
         s["killed_by"] = f"daily_loss({today_pnl:.2f}<=-{LIVE_DAILY_LOSS})"
+        s["killed_at"] = datetime.now(timezone.utc).isoformat()
         return s["killed_by"]
     dd = s["peak"] - s["bankroll"]
     if dd >= LIVE_TOTAL_DD_KILL:
         s["killed_by"] = f"total_dd({dd:.2f}>={LIVE_TOTAL_DD_KILL})"
+        s["killed_at"] = datetime.now(timezone.utc).isoformat()
         return s["killed_by"]
     return None
 
@@ -790,6 +815,15 @@ def main() -> None:
     s = load_state()
     positions = load_positions()
     db_init()
+
+    if os.environ.get("LIVE_KILL_RESET", "").lower() == "true" and s.get("killed_by"):
+        prev = s["killed_by"]
+        prev_peak = s.get("peak", 0.0)
+        s["peak"] = round(s.get("bankroll", 0.0), 4)
+        s["killed_by"] = None
+        s["killed_at"] = None
+        log(f"KILL_RESET  was={prev}  peak=${prev_peak:.2f}->${s['peak']:.2f}  "
+            f"bankroll=${s['bankroll']:.2f}  (unset LIVE_KILL_RESET to disarm)")
 
     log(f"BOOT  mode={'LIVE' if LIVE_ENABLED else 'SHADOW'}  "
         f"stake=${LIVE_STAKE_USD:.2f}  daily_kill=${LIVE_DAILY_LOSS:.0f}  "
